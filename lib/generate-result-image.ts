@@ -206,13 +206,13 @@ export async function generateResultImage(result: AnalysisResult): Promise<strin
   ctx.strokeStyle = '#FECDD3';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(110, 1105, width - 220, 150, 24);
+  ctx.roundRect(110, 1100, width - 220, 155, 24);
   ctx.fill();
   ctx.stroke();
 
   // オオマシコ ミニイラスト（Canvasベクター直接描画）
   const birdX = 180;
-  const birdY = 1180;
+  const birdY = 1178;
   // 体
   ctx.fillStyle = '#F43F5E';
   ctx.beginPath();
@@ -249,18 +249,36 @@ export async function generateResultImage(result: AnalysisResult): Promise<strin
   ctx.textAlign = 'left';
   ctx.fillStyle = '#BE123C';
   ctx.font = 'bold 20px "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif';
-  ctx.fillText('案内役 りえこ（オオマシコ）より', 245, 1145);
+  ctx.fillText('案内役 りえこ（オオマシコ）より', 245, 1140);
 
   ctx.fillStyle = '#4C0519';
-  ctx.font = '19px "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif';
-  // 複数行に折り返し
+  ctx.font = '18px "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif';
+  
+  // 最大横幅に合わせて正確に自動改行（はみ出し防止）
   const commentText = season.riekoComment;
-  const line1 = commentText.slice(0, 28);
-  const line2 = commentText.slice(28);
-  ctx.fillText(line1, 245, 1182);
-  if (line2) {
-    ctx.fillText(line2, 245, 1214);
+  const maxCommentWidth = width - 220 - 150; // 枠の右端から余白を取った安全幅（約710px）
+  const words = commentText.split('');
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (let i = 0; i < words.length; i++) {
+    const testLine = currentLine + words[i];
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxCommentWidth && currentLine.length > 0) {
+      lines.push(currentLine);
+      currentLine = words[i];
+    } else {
+      currentLine = testLine;
+    }
   }
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  // 描画（行間28px）
+  lines.forEach((line, lineIdx) => {
+    ctx.fillText(line, 245, 1174 + lineIdx * 26);
+  });
 
   // 9. カード下部署名
   ctx.textAlign = 'center';

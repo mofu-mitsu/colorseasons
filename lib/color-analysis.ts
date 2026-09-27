@@ -15,6 +15,15 @@ export interface OKLCH {
 
 export type SeasonType = 'spring' | 'summer' | 'autumn' | 'winter';
 
+export interface PaletteColorItem {
+  name: string;
+  hex: string;
+  description: string;
+  category: 'base' | 'main' | 'accent';
+  coordPoint: string; // おすすめコーディネートのポイント
+  bestMatch: string;  // ベスト相性アイテム・配色
+}
+
 export interface SeasonInfo {
   id: SeasonType;
   name: string;
@@ -34,12 +43,7 @@ export interface SeasonInfo {
   textColor: string;
   borderColor: string;
   keywords: string[];
-  palette: {
-    name: string;
-    hex: string;
-    description: string;
-    category: 'base' | 'main' | 'accent';
-  }[];
+  palette: PaletteColorItem[];
   ngColorAdvice: {
     colorName: string;
     reason: string;
@@ -60,25 +64,31 @@ export function rgbToOklch(rgb: RGB): OKLCH {
   const gNorm = rgb.g / 255;
   const bNorm = rgb.b / 255;
 
-  // 2. Linear sRGB 変換 (ガンマ補正解除)
-  const toLinear = (c: number) => {
-    return c > 0.04045 ? Math.pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
-  };
-  const rLin = toLinear(rNorm);
-  const gLin = toLinear(gNorm);
-  const bLin = toLinear(bNorm);
+  // 2. ガンマ補正を解除して Linear sRGB に変換
+  const toLinear = (c: number) =>
+    c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 
-  // 3. Linear sRGB -> LMS (Cone Response Matrix for OKLab)
-  const l_ = Math.cbrt(0.4122214708 * rLin + 0.5363325363 * gLin + 0.0514459929 * bLin);
-  const m_ = Math.cbrt(0.2119034982 * rLin + 0.6806995451 * gLin + 0.1073969566 * bLin);
-  const s_ = Math.cbrt(0.0883024619 * rLin + 0.2817188376 * gLin + 0.6299787005 * bLin);
+  const rLinear = toLinear(rNorm);
+  const gLinear = toLinear(gNorm);
+  const bLinear = toLinear(bNorm);
 
-  // 4. LMS -> OKLab (L, a, b)
+  // 3. Linear sRGB -> OKLab 行列変換
+  const l =
+    0.4122214708 * rLinear + 0.5363325363 * gLinear + 0.0514459929 * bLinear;
+  const m =
+    0.2119034982 * rLinear + 0.6806995451 * gLinear + 0.1073969566 * bLinear;
+  const s =
+    0.0883024619 * rLinear + 0.2817188376 * gLinear + 0.6299787005 * bLinear;
+
+  const l_ = Math.cbrt(l);
+  const m_ = Math.cbrt(m);
+  const s_ = Math.cbrt(s);
+
   const L = 0.2104542553 * l_ + 0.793617785 * m_ - 0.0040720468 * s_;
   const a = 1.9779984951 * l_ - 2.428592205 * m_ + 0.4505937099 * s_;
   const b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_;
 
-  // 5. OKLab -> OKLCH
+  // 4. OKLab (L, a, b) -> OKLCH (L, C, H)
   const C = Math.sqrt(a * a + b * b);
   let hRad = Math.atan2(b, a);
   let hDeg = (hRad * 180) / Math.PI;
@@ -95,7 +105,6 @@ export function rgbToOklch(rgb: RGB): OKLCH {
 
 // 簡易ホワイトバランスキャリブレーション
 export function calibrateRGB(measuredRGB: RGB, referenceWhite: RGB): RGB {
-  // referenceWhite が純白(255,255,255)に対してどれだけズレているかを補正
   const rScale = referenceWhite.r > 20 ? 255 / referenceWhite.r : 1;
   const gScale = referenceWhite.g > 20 ? 255 / referenceWhite.g : 1;
   const bScale = referenceWhite.b > 20 ? 255 / referenceWhite.b : 1;
@@ -116,24 +125,16 @@ export function compensateShadowRGB(rgb: RGB): RGB {
   const oklch = rgbToOklch(rgb);
   const { l, c, h } = oklch;
 
-  // 影や室内光による照度低下の深さ（L < 0.75 を基準）
   const shadowDepth = Math.max(0, Math.min(1, (0.75 - l) / 0.35));
-
-  // 1. 露出・照度ブースト（適正な自然光ハイライト肌色明度 L: 0.72〜0.78 へ）
   const targetL = Math.min(0.80, l + shadowDepth * 0.16 + 0.03);
 
-  // 2. 影・室内照明由来の偽黄みシフト（Shadow & Ambient Warmth）のキャンセル
-  // 室内撮影ではHが黄側（48°〜62°）へ跳ね上がるため、本来のクールトーンへ適正シフト
   let targetH = h;
   if (h > 40 && h < 68) {
-    // 室内光・影の黄色かぶりを最大 7°〜12° ニュートラル・ピンク側へ戻す
     targetH = Math.max(34, h - (shadowDepth * 7.5 + 4.0));
   }
 
-  // 3. 彩度の微調整（くすみを除去して澄んだトーンに）
   const targetC = Math.max(0.045, Math.min(0.11, c * 0.95));
 
-  // 4. OKLCHから適正化されたRGBを逆算
   const hRad = (targetH * Math.PI) / 180;
   const a = targetC * Math.cos(hRad);
   const b = targetC * Math.sin(hRad);
@@ -172,16 +173,16 @@ export function rgbToHex(rgb: RGB): string {
 
 // 質問回答による補助スコアの型
 export interface QuestionnaireAnswers {
-  q1?: 'coral' | 'rose'; // ピンク系
-  q2?: 'ivory' | 'white'; // 白系
-  q3?: 'gold' | 'silver'; // アクセサリ
-  q4?: 'warm_neutral' | 'cool_neutral'; // ベーシック
+  q1?: 'coral' | 'rose';
+  q2?: 'ivory' | 'white';
+  q3?: 'gold' | 'silver';
+  q4?: 'warm_neutral' | 'cool_neutral';
 }
 
 export interface AnalysisResult {
   primarySeason: SeasonType;
   secondarySeason: SeasonType;
-  scores: Record<SeasonType, number>; // 0 - 100%
+  scores: Record<SeasonType, number>;
   dominantRGB: RGB;
   oklch: OKLCH;
   skinDescription: string;
@@ -208,47 +209,36 @@ export function analyzeSkinColor(
     lightingQuality = 'cool_tint';
   }
 
-  // シーズン基準スコアの初期値
   let springScore = 20;
   let summerScore = 20;
   let autumnScore = 20;
   let winterScore = 20;
 
   // 1. ベースカラー判定（イエローベース vs ブルーベース）
-  // 【重要】OKLCHの色相環 H (0°〜360°):
+  // 【超重要】OKLCHの色相環 H (0°〜360°):
   // ・220°〜360°: 青・青紫・紫・マゼンタ (超明確なブルーベース！！)
   // ・0°〜48°: 赤・チェリー・ピンク・ローズ (ブルーベース〜ニュートラル)
   // ・52°〜110°: 黄色・ゴールデン・オークル (イエローベース)
   const rgDiff = Math.max(1, rgb.r - rgb.b);
   const gbDiff = Math.max(0, rgb.g - rgb.b);
-  const yellowRatio = gbDiff / rgDiff; // 0.42以上は明確な黄み、0.38以下は青み・透明感
+  const yellowRatio = gbDiff / rgDiff;
 
-  // ブルーベース条件:
-  // 1. Hが220°以上 (青・紫・マゼンタ・クール系)
-  // 2. または H < 48° (赤・ピンク・ローズ系)
-  // 3. または (H < 54° かつ yellowRatio < 0.39) (黄みが抜けた透明感肌)
-  // 4. または 青(B)成分が緑(G)と同等以上 (rgb.b >= rgb.g - 5)
   const isCoolHue = h >= 220.0 || h < 48.0;
   const isBlueRich = rgb.b >= rgb.g - 8;
   const isCool = isCoolHue || (h < 54.0 && yellowRatio < 0.39) || isBlueRich;
 
-  // イエローベース条件:
-  // Hが 52°〜120° (黄み・ゴールデン・オークル) かつ GがBより明確に大きい
-  const isWarm = (h >= 52.0 && h < 120.0 && rgb.g > rgb.b + 12) || (h >= 50.0 && h < 100.0 && yellowRatio >= 0.42);
-  const isNeutral = !isCool && !isWarm;
+  const isWarm =
+    (h >= 52.0 && h < 120.0 && rgb.g > rgb.b + 12) ||
+    (h >= 50.0 && h < 100.0 && yellowRatio >= 0.42);
 
   if (isCool) {
     // ブルーベース優勢 (夏・冬)
-    // 夏 (中高明度・穏やかな彩度・パウダリー・淡いピンクベージュ)
-    // 冬 (ハイコントラスト・鮮烈血色・アイシー)
     if (c >= 0.082 || (l < 0.65 && h < 38) || (l >= 0.77 && h < 32)) {
-      // コントラスト・シャープ・鮮烈血色 → 冬 (Winter)
       winterScore += 48;
       summerScore += 24;
       springScore += 8;
       autumnScore += 6;
     } else {
-      // やわらか・くすみニュアンス・パウダリー透明感 → 夏 (Summer)
       summerScore += 50;
       winterScore += 20;
       springScore += 10;
@@ -256,29 +246,25 @@ export function analyzeSkinColor(
     }
   } else if (isWarm) {
     // イエローベース優勢 (春・秋)
-    // 春 (高明度・澄んだツヤ) vs 秋 (中低明度・マット・深み)
     if (l >= 0.70) {
-      // 明るいイエベ → 春 (Spring)
       springScore += 48;
       autumnScore += 20;
       summerScore += 8;
       winterScore += 5;
     } else {
-      // 落ち着いた・深みのあるイエベ → 秋 (Autumn)
       autumnScore += 50;
       springScore += 18;
       winterScore += 10;
       summerScore += 6;
     }
 
-    // 彩度による補正
     if (c >= 0.085) {
       springScore += 6;
     } else {
       autumnScore += 6;
     }
   } else {
-    // ニュートラル（中間ゾーン）
+    // ニュートラル
     if (l >= 0.70) {
       summerScore += 30;
       springScore += 26;
@@ -292,7 +278,7 @@ export function analyzeSkinColor(
     }
   }
 
-  // 2. 任意アンケート回答の加算 (回答がある場合のみ精密補正)
+  // 2. 任意アンケート回答の加算
   if (answers) {
     if (answers.q1 === 'rose') {
       summerScore += 6;
@@ -327,7 +313,7 @@ export function analyzeSkinColor(
     }
   }
 
-  // 総計の正規化 (合計100%にする)
+  // 総計の正規化
   const total = springScore + summerScore + autumnScore + winterScore;
   const rawPercentages = {
     spring: (springScore / total) * 100,
@@ -336,7 +322,6 @@ export function analyzeSkinColor(
     winter: (winterScore / total) * 100,
   };
 
-  // ソートして順位づけ
   const sorted = (Object.entries(rawPercentages) as [SeasonType, number][]).sort(
     (a, b) => b[1] - a[1]
   );
@@ -344,7 +329,6 @@ export function analyzeSkinColor(
   const primarySeason = sorted[0][0];
   const secondarySeason = sorted[1][0];
 
-  // 整数の%に丸め (合計100%に調整)
   const roundedScores: Record<SeasonType, number> = {
     spring: Math.round(rawPercentages.spring),
     summer: Math.round(rawPercentages.summer),
@@ -354,12 +338,11 @@ export function analyzeSkinColor(
   const diff = 100 - (roundedScores.spring + roundedScores.summer + roundedScores.autumn + roundedScores.winter);
   roundedScores[primarySeason] += diff;
 
-  // 肌色特徴の言葉づかい
   let skinDescription = '';
   if (primarySeason === 'spring') {
     skinDescription = 'ふんわり明るいアイボリー〜ピーチ系。春の光を浴びたような温かみと透明感のあるトーンです。';
   } else if (primarySeason === 'summer') {
-    skinDescription = '繊細で涼やかなピンクベージュ系。赤みがほんのり差すパウダリーで透明感あふれる肌トーンです。';
+    skinDescription = '繊細で涼やかなピンクベージュ〜ソフトアイシー系。赤みがほんのり差すパウダリーで透明感あふれる肌トーンです。';
   } else if (primarySeason === 'autumn') {
     skinDescription = '落ち着いた温もりを感じるゴールデンオークル〜テラコッタ系。陶器のようにシックな肌トーンです。';
   } else {
@@ -392,26 +375,110 @@ export const SEASONS_DATA: Record<SeasonType, SeasonInfo> = {
     atmosphere: '🌸 夜桜に月光が差し、ほんのり黄金色の光を反射する花びらのような、柔らかく澄んだ多幸感。',
     description: 'イエベ春タイプは、春に咲く花々や新緑のように、明るく鮮やかで澄んだ暖色が抜群に似合います。身につけると表情が生き生きと輝き、パッと華やぐようなオーラを引き出します。',
     handFeatures: '手の甲・手のひらにほんのり黄みを含んだピーチベージュ。血色感がよく、ツヤと明るさがある肌質です。',
-    primaryColor: '#F472B6', // 桜ピンク
-    accentColor: '#FACC15', // 月光イエロー
+    primaryColor: '#F472B6',
+    accentColor: '#FACC15',
     bgGradient: 'from-amber-50 via-rose-50 to-emerald-50',
     cardBg: 'bg-gradient-to-br from-pink-50/90 via-amber-50/80 to-emerald-50/90',
     textColor: 'text-amber-950',
     borderColor: 'border-pink-300',
     keywords: ['コーラルピンク', 'ミモザイエロー', 'アップルグリーン', 'アイボリー', 'ピーチ', 'アクアブルー'],
     palette: [
-      { name: 'サクラピンク (桜月)', hex: '#FFB7C5', description: '月夜に優しく浮かぶソメイヨシノの淡いピンク', category: 'main' },
-      { name: 'コーラルピンク', hex: '#F88379', description: '血色感をグッと高める温かいサンゴ色', category: 'main' },
-      { name: 'ムーンライトイエロー', hex: '#FFE58F', description: '夜桜を照らす柔らかな月光のレモンゴールド', category: 'accent' },
-      { name: '若葉グリーン (リーフ)', hex: '#A8D5BA', description: '芽吹いたばかりのみずみずしい新緑', category: 'main' },
-      { name: 'アイボリーホワイト', hex: '#FFFFF0', description: '肌をふんわり明るく見せる温かな白', category: 'base' },
-      { name: 'ピーチメルバ', hex: '#FFCBA4', description: '手肌に極上の透明感を与える桃色', category: 'main' },
-      { name: 'アプリコット', hex: '#FBCEB1', description: '華やかで健康的な明るいオレンジ', category: 'main' },
-      { name: 'ターコイズスプリング', hex: '#40E0D0', description: '春の澄んだ空のような明るい青緑', category: 'accent' },
-      { name: 'ハニーゴールド', hex: '#E6BE8A', description: 'アクセサリーや小物に最適なツヤ感ゴールド', category: 'accent' },
-      { name: 'ライトキャメル', hex: '#C19A6B', description: '春の装いを上品に引き締めるベースカラー', category: 'base' },
-      { name: 'ポピーレッド', hex: '#E35335', description: '生き生きとしたエネルギーをプラスする赤', category: 'accent' },
-      { name: 'ウォームベージュ', hex: '#F5F5DC', description: 'どんな服にも自然に馴染む軽やかな定番色', category: 'base' },
+      {
+        name: 'サクラピンク (桜月)',
+        hex: '#FFB7C5',
+        description: '月夜に優しく浮かぶソメイヨシノの淡いピンク',
+        category: 'main',
+        coordPoint: 'アイボリーのボトムスやゴールドアクセサリーと合わせると、愛らしく上品なお出かけスタイルに。デートや春のイベントに最適です。',
+        bestMatch: 'アイボリー / ライトキャメル / パールゴールド',
+      },
+      {
+        name: 'コーラルピンク',
+        hex: '#F88379',
+        description: '血色感をグッと高める温かいサンゴ色',
+        category: 'main',
+        coordPoint: 'トップスやリップに置くだけで、顔全体のトーンが2トーン明るく見えます。ベージュのジャケットのインナーにも華やか！',
+        bestMatch: 'ウォームベージュ / コーラルリップ / 華奢アクセ',
+      },
+      {
+        name: 'ムーンライトイエロー',
+        hex: '#FFE58F',
+        description: '夜桜を照らす柔らかな月光のレモンゴールド',
+        category: 'accent',
+        coordPoint: 'カーディガンや差し色のバッグ、ストールに。デニムと合わせるだけで一気に垢抜けた休日カジュアルが完成します。',
+        bestMatch: 'インディゴデニム / ホワイトスニーカー / ゴールド',
+      },
+      {
+        name: '若葉グリーン (リーフ)',
+        hex: '#A8D5BA',
+        description: '芽吹いたばかりのみずみずしい新緑',
+        category: 'main',
+        coordPoint: '爽やかで好印象を与えたいオフィス服におすすめ。白シャツとレイヤードすると清潔感あふれる知的なスタイルに。',
+        bestMatch: '白シャツ / キャメルローファー / アイボリーパンツ',
+      },
+      {
+        name: 'アイボリーホワイト',
+        hex: '#FFFFF0',
+        description: '肌をふんわり明るく見せる温かな白',
+        category: 'base',
+        coordPoint: '純白だと浮きやすい春タイプの神カラー。ブラウス、ニット、コートなどメインのトップスに選ぶと肌馴染み抜群。',
+        bestMatch: '春色全般 / ゴールド金具 / ベージュトレンチ',
+      },
+      {
+        name: 'ピーチメルバ',
+        hex: '#FFCBA4',
+        description: '手肌に極上の透明感を与える桃色',
+        category: 'main',
+        coordPoint: 'ネイルやチーク、サマーニットに。手元の肌色をみずみずしく綺麗に見せ、女性らしい柔らかさを引き立てます。',
+        bestMatch: 'ピーチネイル / ブラウンマスカラ / リネンワンピ',
+      },
+      {
+        name: 'アプリコット',
+        hex: '#FBCEB1',
+        description: '華やかで健康的な明るいオレンジ',
+        category: 'main',
+        coordPoint: 'カジュアルなボーダートップスやフレアスカートに。元気で親しみやすい印象を演出したい日にぴったりです。',
+        bestMatch: 'カーキ / エスパドリーユ / ベージュキャップ',
+      },
+      {
+        name: 'ターコイズスプリング',
+        hex: '#40E0D0',
+        description: '春の澄んだ空のような明るい青緑',
+        category: 'accent',
+        coordPoint: 'アクセサリーやスカーフ、夏場の水着・サンダルに。シンプルな白コーデの主役アクセントとして絶大な効果を発揮します。',
+        bestMatch: '白ワンピース / かごバッグ / ターコイズピアス',
+      },
+      {
+        name: 'ハニーゴールド',
+        hex: '#E6BE8A',
+        description: 'アクセサリーや小物に最適なツヤ感ゴールド',
+        category: 'accent',
+        coordPoint: 'ジュエリー、パンプスの金具、時計のベルトに。春タイプのツヤ肌と共鳴して高級感をプラスしてくれます。',
+        bestMatch: 'ゴールドジュエリー / キャメルバッグ',
+      },
+      {
+        name: 'ライトキャメル',
+        hex: '#C19A6B',
+        description: '春の装いを上品に引き締めるベースカラー',
+        category: 'base',
+        coordPoint: 'トレンチコートやレザースカート、ブーツに。黒の代わりに引き締め色として使うと、重くならずに洗練されます。',
+        bestMatch: 'コーラルトップス / アイボリーニット',
+      },
+      {
+        name: 'ポピーレッド',
+        hex: '#E35335',
+        description: '生き生きとしたエネルギーをプラスする赤',
+        category: 'accent',
+        coordPoint: 'リップやミニバッグ、シューズの差し色に。イエベ春の多幸感を最も華やかにアピールできる主役カラーです。',
+        bestMatch: 'デニム / ベージュトレンチ / 赤リップ',
+      },
+      {
+        name: 'ウォームベージュ',
+        hex: '#F5F5DC',
+        description: 'どんな服にも自然に馴染む軽やかな定番色',
+        category: 'base',
+        coordPoint: 'セットアップやワイドパンツ、デイリートートに。どんな春カラーとも優しく調和する頼れる万能選手。',
+        bestMatch: 'ピンクブラウス / ミントカーディガン',
+      },
     ],
     ngColorAdvice: {
       colorName: '重いブラック・暗いチャコールグレー',
@@ -438,26 +505,110 @@ export const SEASONS_DATA: Record<SeasonType, SeasonInfo> = {
     atmosphere: '🫧 青空と波打ち際、サイダーの涼しげな泡、そして水面に溶けていく夕暮れの青紫。儚く洗練されたやわらかさ。',
     description: 'ブルベ夏タイプは、初夏の紫陽花や夕暮れの海辺のように、青みを含んだソフトで穏やかなトーンがとてもよく映えます。くすみパステルや涼やかなニュアンスカラーが、肌の透明感をどこまでも引き立てます。',
     handFeatures: '手の甲・手のひらに赤み・ピンク味があり、血管が青〜紫に見えやすい涼やかで繊細な肌トーンです。',
-    primaryColor: '#38BDF8', // サイダーブルー
-    accentColor: '#A78BFA', // 夕暮れラベンダー
+    primaryColor: '#38BDF8',
+    accentColor: '#A78BFA',
     bgGradient: 'from-sky-50 via-indigo-50/50 to-teal-50',
     cardBg: 'bg-gradient-to-br from-sky-50/90 via-purple-50/80 to-teal-50/90',
     textColor: 'text-slate-900',
     borderColor: 'border-sky-300',
     keywords: ['アイスブルー', 'ラベンダー', 'ローズピンク', 'ソフトホワイト', 'ミントグリーン', 'ブルーグレー'],
     palette: [
-      { name: 'ソーダブルー (サイダーの泡)', hex: '#89CFF0', description: '弾けるサイダーのような涼やかで清涼感あふれる水色', category: 'main' },
-      { name: 'トワイライトラベンダー (夕暮れの空)', hex: '#BDB0D0', description: '夏の夕暮れ時に空が紫に染まる一瞬を切り取った色', category: 'main' },
-      { name: 'ローズピンク', hex: '#FF66CC', description: '青みを含んだソフトでフェミニンな華やぎピンク', category: 'accent' },
-      { name: 'ミントグリーン (海風)', hex: '#98FF98', description: '爽快で清潔感ある淡いグリーン', category: 'main' },
-      { name: 'ミルキーホワイト', hex: '#F8F9FA', description: '純白より柔らかく、肌に溶け込むミルキーな白', category: 'base' },
-      { name: 'ブルーグレー', hex: '#6699CC', description: '夏の装いを一気に都会的で上品に格上げするニュアンス色', category: 'base' },
-      { name: 'オーキッド (薄紫の宵)', hex: '#DA70D6', description: '上品さと優雅さを引き出すエレガントな蘭色', category: 'main' },
-      { name: 'アイスグレー', hex: '#DCDCDC', description: 'シルバーやプラチナと好相性の澄んだベースカラー', category: 'base' },
-      { name: 'ココアブラウン', hex: '#7D5C58', description: '黄みを抑えた、夏タイプにぴったりのシックな茶色', category: 'base' },
-      { name: 'スイカレッド (ウォーターメロン)', hex: '#FC6C85', description: '涼やかさを失わずに血色感を灯す夏の赤', category: 'accent' },
-      { name: 'シアーネイビー', hex: '#2A52BE', description: '黒よりも軽やかで、凛とした知性を演出する紺色', category: 'base' },
-      { name: 'プラチナシルバー', hex: '#E5E4E2', description: 'アクセサリーやラメに最高に映える涼感シルバー', category: 'accent' },
+      {
+        name: 'ソーダブルー (サイダーの泡)',
+        hex: '#89CFF0',
+        description: '弾けるサイダーのような涼やかで清涼感あふれる水色',
+        category: 'main',
+        coordPoint: 'ミルキーホワイトのトップスやアイスグレーのパンツと合わせると、透明感あふれる涼感コーデに。オフィスの爽やかなブラウスにも最適！',
+        bestMatch: '白ブラウス / シルバーアクセ / アイシーグレー',
+      },
+      {
+        name: 'トワイライトラベンダー (夕暮れの空)',
+        hex: '#BDB0D0',
+        description: '夏の夕暮れ時に空が紫に染まる一瞬を切り取った色',
+        category: 'main',
+        coordPoint: 'ブルベ夏の魅力を最大に引き出す勝負色！シアー素材のカーディガンやプリーツスカートに取り入れると、儚げで洗練されたオーラを放ちます。',
+        bestMatch: 'ローズリップ / ココアブラウン / サテン素材',
+      },
+      {
+        name: 'ローズピンク',
+        hex: '#FF66CC',
+        description: '青みを含んだソフトでフェミニンな華やぎピンク',
+        category: 'accent',
+        coordPoint: '甘すぎず知的な青みピンク。顔まわりのスカーフやトップス、リップ・チークに持ってくると、肌の白さと透明感が一気に際立ちます。',
+        bestMatch: 'シアーネイビー / パールピアス / 白ニット',
+      },
+      {
+        name: 'ミントグリーン (海風)',
+        hex: '#98FF98',
+        description: '爽快で清潔感ある淡いグリーン',
+        category: 'main',
+        coordPoint: 'リネンシャツやフレアスカートに。グレーのサンダルやホワイトバッグと合わせると、初夏の風のようなクリーンな印象に。',
+        bestMatch: 'ライトグレー / ホワイトスニーカー / シルバー時計',
+      },
+      {
+        name: 'ミルキーホワイト',
+        hex: '#F8F9FA',
+        description: '純白より柔らかく、肌に溶け込むミルキーな白',
+        category: 'base',
+        coordPoint: 'ブルベ夏の必須ベースカラー。真っ白よりも少しだけ柔らかいトーンが肌にスッと馴染み、上品な透明感の土台を作ります。',
+        bestMatch: '全サマーパレット / プラチナジュエリー',
+      },
+      {
+        name: 'ブルーグレー',
+        hex: '#6699CC',
+        description: '夏の装いを一気に都会的で上品に格上げするニュアンス色',
+        category: 'base',
+        coordPoint: '黒の代わりに使える万能シックカラー。セットアップ、トレンチ、テーパードパンツに選ぶと、知的でエレガントな佇まいに。',
+        bestMatch: '白Tシャツ / ラベンダーインナー / プラチナ小物',
+      },
+      {
+        name: 'オーキッド (薄紫の宵)',
+        hex: '#DA70D6',
+        description: '上品さと優雅さを引き出すエレガントな蘭色',
+        category: 'main',
+        coordPoint: 'ワンピースやきれいめニットに。ゴールドよりもシルバーやパールのアクセサリーを合わせると、大人の華やかさが完成します。',
+        bestMatch: 'シルバーバングル / アイシーグレーパンプス',
+      },
+      {
+        name: 'アイスグレー',
+        hex: '#DCDCDC',
+        description: 'シルバーやプラチナと好相性の澄んだベースカラー',
+        category: 'base',
+        coordPoint: 'スーツ、コート、スラックスの王道色。黄みのないクリアなグレーなので、肌をくすませずスッキリ見せてくれます。',
+        bestMatch: 'パステルニット / ネイビーバッグ / 白スニーカー',
+      },
+      {
+        name: 'ココアブラウン',
+        hex: '#7D5C58',
+        description: '黄みを抑えた、夏タイプにぴったりのシックな茶色',
+        category: 'base',
+        coordPoint: '黄みの強いキャメルが苦手なブルベ夏のための神ブラウン。秋冬のコートやレザーバッグ、アイシャドウの締め色に重宝します。',
+        bestMatch: 'ラベンダーニット / ローズウッドリップ',
+      },
+      {
+        name: 'スイカレッド (ウォーターメロン)',
+        hex: '#FC6C85',
+        description: '涼やかさを失わずに血色感を灯す夏の赤',
+        category: 'accent',
+        coordPoint: '青みを含んだジューシーな赤。リップやペディキュア、バッグのワンポイントに使うと、上品な女性らしさがグンと高まります。',
+        bestMatch: 'ホワイトデニム / 麦わら帽子 / 赤リップ',
+      },
+      {
+        name: 'シアーネイビー',
+        hex: '#2A52BE',
+        description: '黒よりも軽やかで、凛とした知性を演出する紺色',
+        category: 'base',
+        coordPoint: 'オフィスやお呼ばれのフォーマルウェアに最適。肌をパッと白く引き締め、清潔感と信頼感を最高レベルに高めてくれます。',
+        bestMatch: 'アイスブルーシャツ / シルクスカーフ',
+      },
+      {
+        name: 'プラチナシルバー',
+        hex: '#E5E4E2',
+        description: 'アクセサリーやラメに最高に映える涼感シルバー',
+        category: 'accent',
+        coordPoint: 'ネックレス、ピアス、リング、アイシャドウのラメに。ブルベ夏のひんやりした肌感と溶け合うようにマッチします。',
+        bestMatch: 'シルバー925 / ホワイトゴールド / パール',
+      },
     ],
     ngColorAdvice: {
       colorName: '強い黄みのマスタード・オレンジ',
@@ -484,26 +635,110 @@ export const SEASONS_DATA: Record<SeasonType, SeasonInfo> = {
     atmosphere: '🍂 水彩絵の具を水に落としたように、赤や橙がじわっと紙に滲む紅葉。温もりと落ち着きのある絵本の世界。',
     description: 'イエベ秋タイプは、紅葉や豊かな大地、熟した果実のように深みと温かみのあるこっくりとしたリッチカラーが非常に似合います。大人っぽく洗練された落ち着きとゴージャス感を醸し出します。',
     handFeatures: '手の甲・手のひらに温かみのあるゴールデンベージュやオークル系。しっとりと落ち着いた大人びた肌質感です。',
-    primaryColor: '#D97706', // 琥珀アンバー
-    accentColor: '#B91C1C', // 紅葉レッド
+    primaryColor: '#D97706',
+    accentColor: '#B91C1C',
     bgGradient: 'from-amber-50 via-orange-50/60 to-stone-100',
     cardBg: 'bg-gradient-to-br from-amber-50/90 via-orange-50/80 to-stone-100/90',
     textColor: 'text-amber-950',
     borderColor: 'border-amber-400',
     keywords: ['テラコッタ', 'マスタード', 'オリーブグリーン', 'キャメル', 'カーキ', 'ボルドー'],
     palette: [
-      { name: 'テラコッタ (滲む素焼き)', hex: '#D45B34', description: '秋のぬくもりを凝縮した、手肌を艶やかに魅せるレンガ色', category: 'main' },
-      { name: 'マスタードゴールド (紅葉銀杏)', hex: '#DCA134', description: '黄金色に染まる銀杏並木のような深みのあるイエロー', category: 'main' },
-      { name: 'オリーブモス (深緑の森)', hex: '#556B2F', description: 'シックで大人びた印象を作る絶妙なグリーン', category: 'base' },
-      { name: 'バーントアンバー (焼き栗)', hex: '#8A3324', description: '水彩画の影のように奥深いブラウンレッド', category: 'accent' },
-      { name: 'リッチキャメル', hex: '#C19A6B', description: '秋タイプのリッチな質感を最高に活かす王道カラー', category: 'base' },
-      { name: 'パンプキンオレンジ', hex: '#FF7518', description: 'こっくりと熟した果実のような温かな橙', category: 'accent' },
-      { name: 'カーキベージュ', hex: '#8F8B66', description: 'こなれ感とナチュラルな気品を両立する万能色', category: 'base' },
-      { name: 'ディープフォレスト', hex: '#224229', description: '深呼吸したくなるような静寂の深い緑', category: 'base' },
-      { name: 'アンティークゴールド', hex: '#CFB53B', description: '燻したようなヴィンテージ調の重厚な輝き', category: 'accent' },
-      { name: 'ウォームホワイト (生成り)', hex: '#EAE6DF', description: '漂白されていない自然な温もりのオフホワイト', category: 'base' },
-      { name: 'サーモンベージュ', hex: '#FF8C69', description: '肌にやさしく馴染む落ち着いた血色カラー', category: 'main' },
-      { name: 'ダークチョコレート', hex: '#3D1C02', description: '黒よりも優しく、洗練されたコントラストを生む締め色', category: 'base' },
+      {
+        name: 'テラコッタ (滲む素焼き)',
+        hex: '#D45B34',
+        description: '秋のぬくもりを凝縮した、手肌を艶やかに魅せるレンガ色',
+        category: 'main',
+        coordPoint: '秋タイプの絶対的エース！リブニットやロングコートに取り入れると、大人の色気とリッチな華やかさが際立ちます。',
+        bestMatch: 'リッチキャメル / ゴールドフープピアス / ブラウンブーツ',
+      },
+      {
+        name: 'マスタードゴールド (紅葉銀杏)',
+        hex: '#DCA134',
+        description: '黄金色に染まる銀杏並木のような深みのあるイエロー',
+        category: 'main',
+        coordPoint: 'ざっくり編みのカーディガンやストールに。カーキやデニムと合わせると、温かみのあるレトロシックなスタイルが完成。',
+        bestMatch: 'ダークデニム / オリーブボトム / レザーバッグ',
+      },
+      {
+        name: 'オリーブモス (深緑の森)',
+        hex: '#556B2F',
+        description: 'シックで大人びた印象を作る絶妙なグリーン',
+        category: 'base',
+        coordPoint: 'ミリタリージャケットやマキシスカートに。生成りやゴールドと合わせると、都会的で洗練されたアースカラーコーデに。',
+        bestMatch: 'ウォームホワイト / アンティークゴールド / ローファー',
+      },
+      {
+        name: 'バーントアンバー (焼き栗)',
+        hex: '#8A3324',
+        description: '水彩画の影のように奥深いブラウンレッド',
+        category: 'accent',
+        coordPoint: 'レザーシューズやバッグ、リップカラーに。秋の深まりを感じさせる重厚感で、全体のコーデをキリッと引き締めます。',
+        bestMatch: 'ベージュトレンチ / チェックストール / 深色リップ',
+      },
+      {
+        name: 'リッチキャメル',
+        hex: '#C19A6B',
+        description: '秋タイプのリッチな質感を最高に活かす王道カラー',
+        category: 'base',
+        coordPoint: 'ウールコートやテーラードジャケットに。羽織るだけでラグジュアリーなオーラをまとうことができる一生モノのベースカラー。',
+        bestMatch: 'テラコッタインナー / ゴールド金具',
+      },
+      {
+        name: 'パンプキンオレンジ',
+        hex: '#FF7518',
+        description: 'こっくりと熟した果実のような温かな橙',
+        category: 'accent',
+        coordPoint: '休日のカジュアルニットや差し色のマフラーに。秋の澄んだ空気に映えるフレンドリーで温かい存在感を放ちます。',
+        bestMatch: 'ブラウンパンツ / かごバッグ / アンバーアクセ',
+      },
+      {
+        name: 'カーキベージュ',
+        hex: '#8F8B66',
+        description: 'こなれ感とナチュラルな気品を両立する万能色',
+        category: 'base',
+        coordPoint: 'チノパン、マウンテンパーカー、サロペットに。カジュアルになりすぎず、品格をキープした大人のこなれ感を演出。',
+        bestMatch: '白Tシャツ / レザースニーカー / ゴールドブレス',
+      },
+      {
+        name: 'ディープフォレスト',
+        hex: '#224229',
+        description: '深呼吸したくなるような静寂の深い緑',
+        category: 'base',
+        coordPoint: '黒の代わりに使える深みグリーン。ロングコートやプリーツスカートに選ぶと、神秘的で知的な大人の魅力を醸し出します。',
+        bestMatch: 'マスタードインナー / キャメルブーツ',
+      },
+      {
+        name: 'アンティークゴールド',
+        hex: '#CFB53B',
+        description: '燻したようなヴィンテージ調の重厚な輝き',
+        category: 'accent',
+        coordPoint: '真鍮やブロンズ調のアクセサリー、バングル、ベルトに。肌の温かみと一体化して圧倒的なヴィンテージ感を演出。',
+        bestMatch: '真鍮ジュエリー / レザーアイテム',
+      },
+      {
+        name: 'ウォームホワイト (生成り)',
+        hex: '#EAE6DF',
+        description: '漂白されていない自然な温もりのオフホワイト',
+        category: 'base',
+        coordPoint: 'ケーブルニットやリネンシャツに。人工的でない天然のぬくもりが、イエベ秋の肌を優しく柔らかく包み込みます。',
+        bestMatch: 'アースカラー全般 / べっ甲メガネ',
+      },
+      {
+        name: 'サーモンベージュ',
+        hex: '#FF8C69',
+        description: '肌にやさしく馴染む落ち着いた血色カラー',
+        category: 'main',
+        coordPoint: 'ブラウスやチークカラーに。自然な血色感をプラスし、ヘルシーで優しい表情を引き出してくれます。',
+        bestMatch: 'カーキジャケット / ブラウンアイシャドウ',
+      },
+      {
+        name: 'ダークチョコレート',
+        hex: '#3D1C02',
+        description: '黒よりも優しく、洗練されたコントラストを生む締め色',
+        category: 'base',
+        coordPoint: 'レザーライダース、ブーツ、アイライナーに。強い黒よりも肌馴染みが良く、深みのあるモダンな印象に仕上がります。',
+        bestMatch: 'テラコッタスカート / ゴールドピアス',
+      },
     ],
     ngColorAdvice: {
       colorName: '青みの強いパステルカラー・青みの青',
@@ -530,26 +765,110 @@ export const SEASONS_DATA: Record<SeasonType, SeasonInfo> = {
     atmosphere: '❄️ 白銀の夜、月光の中でひっそりと凍りついた薔薇と氷の結晶。研ぎ澄まされた静寂と圧倒的な存在感。',
     description: 'ブルベ冬タイプは、純白と漆黒、鮮やかな原色や極限まで淡いアイシーカラーなど、キリリと冴えたコントラストが最も似合います。シャープでモダン、凛とした圧倒的な魅力を放ちます。',
     handFeatures: '手の甲・手のひらに赤みまたは青みがあり、透き通るような白さやコントラストがはっきりした肌トーンです。',
-    primaryColor: '#2563EB', // ロイヤルブルー
-    accentColor: '#9333EA', // アイシーバイオレット
+    primaryColor: '#2563EB',
+    accentColor: '#9333EA',
     bgGradient: 'from-slate-100 via-blue-50/50 to-indigo-50',
     cardBg: 'bg-gradient-to-br from-slate-100/90 via-blue-50/80 to-purple-50/90',
     textColor: 'text-slate-900',
     borderColor: 'border-blue-400',
     keywords: ['ロイヤルブルー', 'アイシーピンク', 'ピュアホワイト', 'ブラック', 'ワインレッド', 'シルバー'],
     palette: [
-      { name: 'ロイヤルブルー (深海の青)', hex: '#1A4384', description: '白銀の雪景色に鮮烈に映える、高貴で冴えた青', category: 'main' },
-      { name: 'アイシーローズ (凍った花)', hex: '#F0E6EF', description: '氷でコーティングされた花びらのように極限まで淡い冷光ピンク', category: 'main' },
-      { name: 'ピュアホワイト (純白の雪)', hex: '#FFFFFF', description: '黄みのない、雪原そのもののクリアな真っ白', category: 'base' },
-      { name: '漆黒 (ジェットブラック)', hex: '#0A0A0A', description: '冬タイプだからこそスタイリッシュに着こなせる絶対の黒', category: 'base' },
-      { name: 'ルビーワイン (真冬の薔薇)', hex: '#722F37', description: 'ドラマティックで深みのある大人のディープレッド', category: 'accent' },
-      { name: 'フューシャピンク', hex: '#FF007F', description: '視線を惹きつける鮮やかでクールなネオンピンク', category: 'accent' },
-      { name: 'アイシーブルー (氷晶)', hex: '#D4F1F4', description: '清らかな氷のきらめきを連想させる極淡ブルー', category: 'base' },
-      { name: 'エメラルドグリーン', hex: '#50C878', description: '宝石のように澄み渡った鮮やかな冷緑', category: 'main' },
-      { name: 'ミッドナイトネイビー', hex: '#000080', description: '真夜中の静寂を纏う、気品ある濃紺', category: 'base' },
-      { name: 'アイシーバイオレット', hex: '#D8D4E2', description: '涼やかで透明感あふれる極薄の紫', category: 'main' },
-      { name: 'シルバーメタリック', hex: '#C0C0C0', description: '氷の結晶のように鋭く輝くプラチナシルバー', category: 'accent' },
-      { name: 'マゼンタパープル', hex: '#9E0142', description: 'クールさと情熱を併せ持つ洗練のバイオレット', category: 'accent' },
+      {
+        name: 'ロイヤルブルー (深海の青)',
+        hex: '#1A4384',
+        description: '白銀の雪景色に鮮烈に映える、高貴で冴えた青',
+        category: 'main',
+        coordPoint: '冬タイプの気品を最も美しく引き立てる勝負色！ピュアホワイトのパンツや漆黒のコートと合わせると、息を呑むような存在感に。',
+        bestMatch: 'ピュアホワイト / プラチナジュエリー / 赤リップ',
+      },
+      {
+        name: 'アイシーローズ (凍った花)',
+        hex: '#F0E6EF',
+        description: '氷でコーティングされた花びらのように極限まで淡い冷光ピンク',
+        category: 'main',
+        coordPoint: '冬タイプの顔色をクリアに照らすハイライトカラー。黒のレザージャケットのインナーや、とろみブラウスにおすすめ。',
+        bestMatch: 'ジェットブラック / シルバーパンプス / モーヴチーク',
+      },
+      {
+        name: 'ピュアホワイト (純白の雪)',
+        hex: '#FFFFFF',
+        description: '黄みのない、雪原そのもののクリアな真っ白',
+        category: 'base',
+        coordPoint: '冬タイプだからこそ着こなせる濁りのない完全な白。シャツやコートに選ぶと、レフ板効果で肌の透明感が劇的にアップ。',
+        bestMatch: 'ブラックボトムス / 鮮烈レッドリップ',
+      },
+      {
+        name: '漆黒 (ジェットブラック)',
+        hex: '#0A0A0A',
+        description: '冬タイプだからこそスタイリッシュに着こなせる絶対の黒',
+        category: 'base',
+        coordPoint: '全身黒でも決して重く見えず、スタイリッシュなモード感を放てるのは冬タイプの特権。シルバーアクセを効かせてクールに。',
+        bestMatch: 'シルバーチョーカー / アイシーカラー全般',
+      },
+      {
+        name: 'ルビーワイン (真冬の薔薇)',
+        hex: '#722F37',
+        description: 'ドラマティックで深みのある大人のディープレッド',
+        category: 'accent',
+        coordPoint: '冬の夜のお出かけやパーティーに。リップやロングワンピース、カシミヤストールに取り入れると、大人の色香が漂います。',
+        bestMatch: 'ブラックドレス / ダイヤジュエリー / クラッチバッグ',
+      },
+      {
+        name: 'フューシャピンク',
+        hex: '#FF007F',
+        description: '視線を惹きつける鮮やかでクールなネオンピンク',
+        category: 'accent',
+        coordPoint: 'バッグやパンプス、リップなどワンポイントに。モノトーンコーデに1点投入するだけで、一気にファッショニスタな装いに。',
+        bestMatch: 'モノトーンコーデ / 黒スキニー / グロッシーリップ',
+      },
+      {
+        name: 'アイシーブルー (氷晶)',
+        hex: '#D4F1F4',
+        description: '清らかな氷のきらめきを連想させる極淡ブルー',
+        category: 'base',
+        coordPoint: 'ハイゲージニットやシャツに。黒やネイビーのボトムスと合わせるだけで、涼やかで知的なオフィススタイルが完成。',
+        bestMatch: 'ネイビーパンツ / ホワイトスニーカー / シルバー時計',
+      },
+      {
+        name: 'エメラルドグリーン',
+        hex: '#50C878',
+        description: '宝石のように澄み渡った鮮やかな冷緑',
+        category: 'main',
+        coordPoint: 'きれいめタイトスカートやブラウスに。濁りのない鮮やかなグリーンが、冬タイプのキリリとした顔立ちを引き締めます。',
+        bestMatch: '黒タートル / シルバーピアス / ポインテッドトゥ',
+      },
+      {
+        name: 'ミッドナイトネイビー',
+        hex: '#000080',
+        description: '真夜中の静寂を纏う、気品ある濃紺',
+        category: 'base',
+        coordPoint: 'スーツ、チェスターコート、オケージョンドレスに。黒に劣らない引き締め力と、ノーブルな知性を両立します。',
+        bestMatch: 'アイシーローズブラウス / パールネックレス',
+      },
+      {
+        name: 'アイシーバイオレット',
+        hex: '#D8D4E2',
+        description: '涼やかで透明感あふれる極薄の紫',
+        category: 'main',
+        coordPoint: 'サマーニットやサテンスカートに。ミステリアスで透明感のある女性らしさを自然に醸し出したいときに。',
+        bestMatch: 'チャコールグレー / プラチナリング / ラベンダーシャドウ',
+      },
+      {
+        name: 'シルバーメタリック',
+        hex: '#C0C0C0',
+        description: '氷の結晶のように鋭く輝くプラチナシルバー',
+        category: 'accent',
+        coordPoint: 'パンプス、バッグ、ジュエリーに。シャープな光沢が冬タイプの透明感を最高潮にブーストしてくれます。',
+        bestMatch: '冬色全般 / クリスタルアクセサリー',
+      },
+      {
+        name: 'マゼンタパープル',
+        hex: '#9E0142',
+        description: 'クールさと情熱を併せ持つ洗練のバイオレット',
+        category: 'accent',
+        coordPoint: '鮮やかなカラーパンツや主役級ニットに。冬タイプのドラマティックな魅力を大胆にアピールできる一押しカラーです。',
+        bestMatch: '黒ライダース / ホワイトシャツ / シルバーバッグ',
+      },
     ],
     ngColorAdvice: {
       colorName: '黄みの強い濁ったアースカラー（くすんだカーキ・黄土色）',

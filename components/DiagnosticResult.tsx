@@ -6,6 +6,7 @@ import {
   SeasonType,
   AnalysisResult,
   SEASONS_DATA,
+  PaletteColorItem,
   rgbToHex,
 } from '@/lib/color-analysis';
 import RiekoBird from './RiekoBird';
@@ -42,11 +43,7 @@ interface RakutenItem {
 }
 
 export default function DiagnosticResult({ result, onRetake }: DiagnosticResultProps) {
-  const [selectedColor, setSelectedColor] = useState<{
-    name: string;
-    hex: string;
-    description: string;
-  } | null>(null);
+  const [selectedColor, setSelectedColor] = useState<PaletteColorItem | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
@@ -62,6 +59,15 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
   const seasonInfo = SEASONS_DATA[result.primarySeason];
   const secondSeasonInfo = SEASONS_DATA[result.secondarySeason];
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const colorDetailRef = useRef<HTMLDivElement | null>(null);
+
+  // パレットクリック時に自動スクロール
+  const handleSelectColor = (color: PaletteColorItem) => {
+    setSelectedColor(color);
+    setTimeout(() => {
+      colorDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 80);
+  };
 
   // 初回表示時に四季特化の紙吹雪演出
   useEffect(() => {
@@ -229,8 +235,8 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
         {/* コンテンツ本体（z-10） */}
         <div className="relative z-10 space-y-6">
           {/* 上部タグ＆案内役 */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-6 pb-6 border-b border-black/5">
-            <div>
+          <div className="flex flex-col lg:flex-row items-center justify-between gap-6 pb-6 border-b border-black/5 w-full">
+            <div className="w-full lg:flex-1">
               <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/90 backdrop-blur-xs rounded-full text-xs font-bold text-rose-700 shadow-2xs mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-rose-500" />
                 <span>パーソナルカラー診断結果</span>
@@ -255,7 +261,7 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
             </div>
 
             {/* りえこちゃんの案内コメント */}
-            <div className="shrink-0">
+            <div className="w-full lg:w-auto shrink-0 flex justify-center lg:justify-end overflow-hidden max-w-full">
               <RiekoBird
                 season={result.primarySeason}
                 message={seasonInfo.riekoComment}
@@ -370,9 +376,11 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
                 return (
                   <button
                     key={color.name}
-                    onClick={() => setSelectedColor(color)}
+                    onClick={() => handleSelectColor(color)}
                     className={`group relative p-3 rounded-2xl bg-white/95 border transition-all text-left shadow-2xs hover:shadow-md cursor-pointer ${
-                      isSelected ? 'ring-2 ring-rose-500 border-rose-300' : 'border-slate-200/80 hover:border-rose-200'
+                      isSelected
+                        ? 'ring-2 ring-rose-500 border-rose-300 scale-[1.02]'
+                        : 'border-slate-200/80 hover:border-rose-300'
                     }`}
                   >
                     <div
@@ -382,44 +390,82 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
                     <div className="text-xs font-bold text-slate-800 truncate" title={color.name}>
                       {color.name}
                     </div>
-                    <div className="text-[10px] text-slate-400 font-mono uppercase">
-                      {color.hex}
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-[10px] text-slate-400 font-mono uppercase">
+                        {color.hex}
+                      </span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-medium">
+                        {color.category === 'base' ? '定番' : color.category === 'main' ? '主役' : '差し色'}
+                      </span>
                     </div>
                   </button>
                 );
               })}
             </div>
 
-            {/* 選択されたカラーの詳細 */}
+            {/* 選択されたカラーの詳細＆おすすめコーディネートポイント */}
             <AnimatePresence>
               {selectedColor && (
                 <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="mt-4 p-4 rounded-2xl bg-white border border-rose-200 shadow-md flex flex-col sm:flex-row items-center gap-4"
+                  ref={colorDetailRef}
+                  initial={{ opacity: 0, y: 10, height: 0 }}
+                  animate={{ opacity: 1, y: 0, height: 'auto' }}
+                  exit={{ opacity: 0, y: 10, height: 0 }}
+                  className="mt-5 p-5 sm:p-6 rounded-3xl bg-white/95 border-2 border-rose-200 shadow-xl space-y-4"
                 >
-                  <div
-                    style={{ backgroundColor: selectedColor.hex }}
-                    className="w-16 h-16 rounded-2xl shadow-inner border border-black/10 shrink-0"
-                  />
-                  <div className="flex-1 text-center sm:text-left">
-                    <div className="flex items-center justify-center sm:justify-start gap-2">
-                      <span className="font-bold text-slate-900 text-sm">{selectedColor.name}</span>
-                      <span className="text-xs font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-                        {selectedColor.hex}
-                      </span>
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-3 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div
+                        style={{ backgroundColor: selectedColor.hex }}
+                        className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl shadow-md border-2 border-white ring-1 ring-slate-200 shrink-0"
+                      />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-bold text-slate-900 text-base sm:text-lg">
+                            {selectedColor.name}
+                          </h4>
+                          <span className="text-xs font-mono font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-lg">
+                            {selectedColor.hex}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-0.5 font-sans">
+                          {selectedColor.description}
+                        </p>
+                      </div>
                     </div>
-                    <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                      {selectedColor.description}
-                    </p>
+
+                    <button
+                      onClick={() => setSelectedColor(null)}
+                      className="self-end sm:self-center text-xs text-slate-400 hover:text-slate-700 px-3 py-1.5 border border-slate-200 hover:border-slate-300 rounded-xl cursor-pointer transition-colors shrink-0"
+                    >
+                      閉じる ✕
+                    </button>
                   </div>
-                  <button
-                    onClick={() => setSelectedColor(null)}
-                    className="text-xs text-slate-400 hover:text-slate-700 px-3 py-1 border rounded-lg cursor-pointer shrink-0"
-                  >
-                    閉じる
-                  </button>
+
+                  {/* おすすめコーディネートのポイント（詳細解説） */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
+                    {/* 着こなし＆メイクのアドバイス */}
+                    <div className="p-3.5 rounded-2xl bg-gradient-to-br from-rose-50/70 to-pink-50/50 border border-rose-100/80">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-rose-800 mb-1.5">
+                        <span>👗</span>
+                        <span>おすすめコーディネートのポイント</span>
+                      </div>
+                      <p className="text-xs text-slate-700 leading-relaxed font-sans">
+                        {selectedColor.coordPoint || 'このカラーをトップスや顔周りに持ってくると、肌の透明感と血色感がぐっと引き立ちます。'}
+                      </p>
+                    </div>
+
+                    {/* 相性の良い配色＆アイテム */}
+                    <div className="p-3.5 rounded-2xl bg-gradient-to-br from-sky-50/70 to-indigo-50/50 border border-sky-100/80">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-sky-800 mb-1.5">
+                        <span>✨</span>
+                        <span>ベスト相性アイテム・おすすめ配色</span>
+                      </div>
+                      <p className="text-xs text-slate-700 leading-relaxed font-sans font-medium">
+                        {selectedColor.bestMatch || 'ミルキーホワイト、シルバー、ブルーグレー'}
+                      </p>
+                    </div>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

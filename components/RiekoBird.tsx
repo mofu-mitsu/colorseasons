@@ -57,7 +57,7 @@ export default function RiekoBird({
   );
 
   return (
-    <div className="flex flex-col sm:flex-row items-center gap-3 relative select-none">
+    <div className="flex flex-col sm:flex-row items-center gap-3 relative select-none w-full max-w-full justify-center sm:justify-end">
       {/* 吹き出し */}
       {showSpeechBubble && (
         <AnimatePresence mode="wait">
@@ -67,14 +67,14 @@ export default function RiekoBird({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.3 }}
-            className="relative bg-white/95 backdrop-blur-md px-4 py-3 rounded-2xl shadow-lg border border-rose-200/80 max-w-xs sm:max-w-sm text-sm text-slate-700 order-2 sm:order-1"
+            className="relative bg-white/95 backdrop-blur-md px-3.5 sm:px-4 py-3 rounded-2xl shadow-lg border border-rose-200/80 w-full sm:w-auto max-w-full sm:max-w-xs md:max-w-sm text-xs sm:text-sm text-slate-700 order-2 sm:order-1 break-words"
           >
             <div className="flex items-center gap-1.5 mb-1 text-[11px] font-medium text-rose-500 tracking-wider">
-              <FontAwesomeIcon icon={faFeather} className="w-3 h-3 text-rose-400" />
-              <span>案内役 りえこ（オオマシコ）</span>
-              <span className="text-[10px] text-slate-400 font-normal">※たぶんブルベ夏</span>
+              <FontAwesomeIcon icon={faFeather} className="w-3 h-3 text-rose-400 shrink-0" />
+              <span className="truncate">案内役 りえこ（オオマシコ）</span>
+              <span className="text-[10px] text-slate-400 font-normal shrink-0">※たぶんブルベ夏</span>
             </div>
-            <p className="leading-relaxed font-sans">{defaultMessage}</p>
+            <p className="leading-relaxed font-sans break-words">{defaultMessage}</p>
 
             {/* 吹き出しの三角ヒゲ */}
             <div className="hidden sm:block absolute right-[-8px] top-1/2 -translate-y-1/2 w-0 h-0 border-y-8 border-y-transparent border-l-8 border-l-white/95" />
