@@ -1,0 +1,8 @@
+{
+  "name": "四季色 - 手のひらから探すパーソナルカラー診断",
+  "description": "手の写真から色彩（OKLCH）を瞬間解析。春・夏・秋・冬の四季の世界観に染まる、オオマシコが案内するパーソナルカラー診断＆おすすめカラー紹介。",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

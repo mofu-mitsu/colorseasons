@@ -1,0 +1,98 @@
+/* ==============================================================================
+   四季色 (COLOR SEASONS) - Googleスプレッドシート連携 Google Apps Script (GAS)
+   ==============================================================================
+   
+   【概要】
+   パーソナルカラー診断が完了した際に、診断日時・シーズン・スコア・手肌色の測定値などを
+   Googleスプレッドシートに自動記録するためのWeb APIスクリプトです。
+
+   【導入手順】
+   1. 新しいGoogleスプレッドシートを作成します。
+   2. メニューの「拡張機能」 > 「Apps Script」を開きます。
+   3. エディタに元々あるコードを消去し、下記のコードをすべて貼り付けて保存します。
+   4. 関数「initSheet」を選択して「実行」ボタンを押します（ヘッダー行が自動作成されます）。
+   5. 右上の「デプロイ」 > 「新しいデプロイ」をクリックします。
+   6. 種類の選択で「ウェブアプリ」を選択します。
+      - 次のユーザーとして実行: 「自分」
+      - アクセスできるユーザー: 「全員 (Anyone)」※重要！
+   7. 「デプロイ」をクリックし、発行された「ウェブアプリのURL」をコピーします。
+      （例: https://script.google.com/macros/s/AKfycb.../exec）
+   8. Vercelの環境変数に「NEXT_PUBLIC_GAS_WEBAPP_URL」として追加するか、
+      またはアプリに設定すれば自動連携されます！
+============================================================================== */
+
+/**
+ * 初回実行用：スプレッドシートの1行目にヘッダーを自動生成します
+ */
+function initSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getActiveSheet();
+  sheet.setName('診断ログ');
+
+  var headers = [
+    '診断日時',
+    'メインシーズン',
+    '2ndシーズン',
+    '春(%)',
+    '夏(%)',
+    '秋(%)',
+    '冬(%)',
+    '手肌HEX',
+    '明度 L(%)',
+    '彩度 C',
+    '色相 H(°)',
+    '診断モード',
+    '白補正'
+  ];
+
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length).setBackground('#FFE4E6').setFontWeight('bold');
+  sheet.setFrozenRows(1);
+}
+
+/**
+ * WebアプリへPOSTリクエストが届いた時にスプレッドシートへ追記
+ */
+function doPost(e) {
+  try {
+    var rawData = e.postData.contents;
+    var data = JSON.parse(rawData);
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('診断ログ') || ss.getActiveSheet();
+
+    // 日本標準時 (JST) でフォーマット
+    var dateStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
+
+    var newRow = [
+      dateStr,
+      data.primarySeason || '',
+      data.secondarySeason || '',
+      data.springScore || 0,
+      data.summerScore || 0,
+      data.autumnScore || 0,
+      data.winterScore || 0,
+      data.skinHex || '',
+      data.oklchL || '',
+      data.oklchC || '',
+      data.oklchH || '',
+      data.mode || '',
+      data.isCalibrated || 'なし'
+    ];
+
+    sheet.appendRow(newRow);
+
+    return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * 疎通テスト用GETハンドラ
+ */
+function doGet(e) {
+  return ContentService.createTextOutput('四季色 (COLOR SEASONS) GAS API is running successfully!');
+}
