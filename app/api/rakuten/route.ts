@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Keyword is required' }, { status: 400 });
     }
 
-    // 環境変数の柔軟な検出（プレフィックス違いや命名ブレに対応）
+    // 環境変数の柔軟な検出
     const appId =
       process.env.RAKUTEN_APP_ID ||
       process.env.RAKUTEN_APPLICATION_ID ||
@@ -37,7 +37,12 @@ export async function GET(req: NextRequest) {
       process.env.AFFILIATE_ID ||
       process.env.NEXT_PUBLIC_RAKUTEN_AFFILIATE_ID;
 
-    // デバッグ用環境変数ステータス
+    // クライアントからのReferer / Origin を取得、なければ本番URL
+    const incomingReferer = req.headers.get('referer') || '';
+    const incomingOrigin = req.headers.get('origin') || '';
+    const fallbackSiteUrl = 'https://colorseasons.vercel.app';
+    const siteReferer = incomingReferer || incomingOrigin || fallbackSiteUrl;
+
     const envStatus = {
       appIdConfigured: !!appId,
       appIdLength: appId ? appId.length : 0,
@@ -45,11 +50,11 @@ export async function GET(req: NextRequest) {
       accessKeyConfigured: !!accessKey,
       accessKeyLength: accessKey ? accessKey.length : 0,
       affiliateIdConfigured: !!affiliateId,
+      siteReferer,
     };
 
     console.log('[Rakuten API] Request keyword:', keyword, 'EnvStatus:', envStatus);
 
-    // 環境変数が設定されていない場合
     if (!appId || !accessKey) {
       console.warn('[Rakuten API] Credentials not found in process.env');
       return NextResponse.json({
@@ -60,89 +65,113 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 楽天 新API (20260701) エンドポイント
-    const targetUrl = new URL('https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701');
-    targetUrl.searchParams.set('applicationId', appId.trim());
-    targetUrl.searchParams.set('keyword', keyword.trim());
-    targetUrl.searchParams.set('format', 'json');
-    targetUrl.searchParams.set('hits', '12');
-
-    if (affiliateId) {
-      targetUrl.searchParams.set('affiliateId', affiliateId.trim());
+    // 複数のキーワード候補を生成（柔軟検索用フォールバック）
+    // 例: "コーラルピンク ワンピース 春" -> ["コーラルピンク ワンピース 春", "コーラルピンク ワンピース", "コーラルピンク"]
+    const cleanKw = keyword.trim();
+    const words = cleanKw.split(/[\s　]+/);
+    const keywordCandidates: string[] = [cleanKw];
+    if (words.length > 2) {
+      keywordCandidates.push(words.slice(0, 2).join(' '));
+    }
+    if (words.length > 1) {
+      keywordCandidates.push(words[0]);
     }
 
+    // 楽天 新API (20260701) へのリクエストヘッダー
+    // ※ REQUEST_CONTEXT_BODY_HTTP_REFERRER_MISSING を防ぐため Referer と Origin を両方設定
     const headers: Record<string, string> = {
       accessKey: accessKey.trim(),
-      'User-Agent': 'ColorSeasons/1.0',
+      Referer: siteReferer.endsWith('/') ? siteReferer : `${siteReferer}/`,
+      Origin: incomingOrigin || fallbackSiteUrl,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     };
 
-    console.log('[Rakuten API] Fetching:', targetUrl.toString());
+    let lastErrorDetails = '';
+    let lastStatus = 200;
+    let successfulData: any = null;
+    let matchedKeyword = cleanKw;
 
-    const response = await fetch(targetUrl.toString(), {
-      method: 'GET',
-      headers,
-      cache: 'no-store', // リアルタイム動作検証のためキャッシュ無効化
-    });
+    // 候補キーワードで順番に検索を試行（ヒットした時点で終了）
+    for (const kw of keywordCandidates) {
+      const targetUrl = new URL('https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701');
+      targetUrl.searchParams.set('applicationId', appId.trim());
+      targetUrl.searchParams.set('keyword', kw);
+      targetUrl.searchParams.set('format', 'json');
+      targetUrl.searchParams.set('hits', '12');
 
-    const status = response.status;
-    const rawText = await response.text();
+      if (affiliateId) {
+        targetUrl.searchParams.set('affiliateId', affiliateId.trim());
+      }
 
-    console.log(`[Rakuten API] Response status: ${status}, Body length: ${rawText.length}`);
+      console.log(`[Rakuten API] Fetching candidate: "${kw}", URL:`, targetUrl.toString());
 
-    if (!response.ok) {
-      console.error('[Rakuten API] HTTP Error:', status, rawText);
+      try {
+        const response = await fetch(targetUrl.toString(), {
+          method: 'GET',
+          headers,
+          cache: 'no-store',
+        });
+
+        lastStatus = response.status;
+        const rawText = await response.text();
+
+        if (!response.ok) {
+          console.warn(`[Rakuten API] HTTP ${lastStatus} for "${kw}":`, rawText);
+          lastErrorDetails = rawText;
+          // もし403等の認証/Refererエラーなら他キーワードでも同じなのでループを抜ける
+          if (lastStatus === 403 || lastStatus === 401) {
+            break;
+          }
+          continue;
+        }
+
+        const parsed = JSON.parse(rawText);
+        const candidateItems = parsed?.Items || parsed?.items || [];
+        if (Array.isArray(candidateItems) && candidateItems.length > 0) {
+          successfulData = parsed;
+          matchedKeyword = kw;
+          break; // ヒットしたら抜ける
+        }
+      } catch (err: any) {
+        console.error(`[Rakuten API] Fetch error for "${kw}":`, err);
+        lastErrorDetails = err?.message || String(err);
+      }
+    }
+
+    if (!successfulData) {
+      console.warn('[Rakuten API] No items found or API blocked:', lastStatus, lastErrorDetails);
       return NextResponse.json({
         configured: true,
-        error: `Rakuten API returned HTTP status ${status}`,
-        details: rawText.slice(0, 500),
+        success: false,
+        error: `Rakuten API returned status ${lastStatus}`,
+        details: lastErrorDetails.slice(0, 600),
         envStatus,
+        keyword: cleanKw,
         items: [],
       });
     }
 
-    let data: any = {};
-    try {
-      data = JSON.parse(rawText);
-    } catch (parseErr) {
-      console.error('[Rakuten API] JSON parse error:', parseErr, rawText);
-      return NextResponse.json({
-        configured: true,
-        error: 'Failed to parse Rakuten response as JSON',
-        details: rawText.slice(0, 500),
-        items: [],
-      });
-    }
-
-    // レスポンスのアイテム配列を柔軟に抽出（新旧API、様々な構造をサポート）
     const rawItems: any[] =
-      data?.Items ||
-      data?.items ||
-      data?.results ||
-      data?.itemList ||
-      (Array.isArray(data) ? data : []);
-
-    console.log('[Rakuten API] Raw items count:', rawItems.length);
+      successfulData?.Items ||
+      successfulData?.items ||
+      successfulData?.results ||
+      [];
 
     const normalizedItems: RakutenProductItem[] = rawItems
       .map((entry: any, index: number): RakutenProductItem | null => {
         const item = entry.Item || entry.item || entry;
         if (!item || typeof item !== 'object') return null;
 
-        // 商品名
         const itemName = item.itemName || item.title || item.name || `楽天市場 アイテム ${index + 1}`;
-
-        // 価格
         const rawPrice = item.itemPrice ?? item.price ?? 0;
         const itemPrice = typeof rawPrice === 'number' ? rawPrice : Number(String(rawPrice).replace(/[^0-9]/g, '')) || 0;
 
-        // 商品URL / アフィリエイトURL
         const itemUrl =
           item.affiliateUrl ||
           item.itemUrl ||
           item.url ||
-          `https://search.rakuten.co.jp/search/mall/${encodeURIComponent(keyword)}/`;
+          `https://search.rakuten.co.jp/search/mall/${encodeURIComponent(cleanKw)}/`;
 
-        // 画像URL抽出
         let imageUrl = '';
         if (Array.isArray(item.mediumImageUrls) && item.mediumImageUrls.length > 0) {
           const first = item.mediumImageUrls[0];
@@ -155,16 +184,12 @@ export async function GET(req: NextRequest) {
           imageUrl = typeof first === 'string' ? first : first.imageUrl || first.url || '';
         } else if (typeof item.imageUrl === 'string') {
           imageUrl = item.imageUrl;
-        } else if (typeof item.image === 'string') {
-          imageUrl = item.image;
         }
 
-        // HTTPSプロトコル補正
         if (imageUrl && imageUrl.startsWith('http://')) {
           imageUrl = imageUrl.replace('http://', 'https://');
         }
 
-        // ショップ名
         const shopName = item.shopName || item.shop?.shopName || item.shop || '';
 
         return {
@@ -178,19 +203,20 @@ export async function GET(req: NextRequest) {
       .filter((x): x is RakutenProductItem => x !== null)
       .slice(0, 12);
 
-    console.log('[Rakuten API] Normalized items count:', normalizedItems.length);
+    console.log('[Rakuten API] Successfully returned items:', normalizedItems.length, 'for kw:', matchedKeyword);
 
     return NextResponse.json({
       configured: true,
       success: true,
-      keyword,
-      totalHits: data.count || data.totalHits || normalizedItems.length,
+      keyword: cleanKw,
+      matchedKeyword,
+      totalHits: successfulData.count || successfulData.totalHits || normalizedItems.length,
       items: normalizedItems,
       rawItemCount: rawItems.length,
       envStatus,
     });
   } catch (error: any) {
-    console.error('[Rakuten API] Unhandled Error in /api/rakuten:', error);
+    console.error('[Rakuten API] Unhandled Exception:', error);
     return NextResponse.json(
       {
         configured: false,
