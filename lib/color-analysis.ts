@@ -107,6 +107,63 @@ export function calibrateRGB(measuredRGB: RGB, referenceWhite: RGB): RGB {
   };
 }
 
+/**
+ * 陰・照度補正（スマート・シャドウコンペンセーション）
+ * 影によって明度が落ち、室内光やセンサー特性で黄み・赤茶（イエベ方向）へ
+ * 偽陽性シフトしてしまった肌色を、本来の自然光下での透明感肌色へと適正復元します。
+ */
+export function compensateShadowRGB(rgb: RGB): RGB {
+  const oklch = rgbToOklch(rgb);
+  const { l, c, h } = oklch;
+
+  // 影や室内光による照度低下の深さ（L < 0.75 を基準）
+  const shadowDepth = Math.max(0, Math.min(1, (0.75 - l) / 0.35));
+
+  // 1. 露出・照度ブースト（適正な自然光ハイライト肌色明度 L: 0.72〜0.78 へ）
+  const targetL = Math.min(0.80, l + shadowDepth * 0.16 + 0.03);
+
+  // 2. 影・室内照明由来の偽黄みシフト（Shadow & Ambient Warmth）のキャンセル
+  // 室内撮影ではHが黄側（48°〜62°）へ跳ね上がるため、本来のクールトーンへ適正シフト
+  let targetH = h;
+  if (h > 40 && h < 68) {
+    // 室内光・影の黄色かぶりを最大 7°〜12° ニュートラル・ピンク側へ戻す
+    targetH = Math.max(34, h - (shadowDepth * 7.5 + 4.0));
+  }
+
+  // 3. 彩度の微調整（くすみを除去して澄んだトーンに）
+  const targetC = Math.max(0.045, Math.min(0.11, c * 0.95));
+
+  // 4. OKLCHから適正化されたRGBを逆算
+  const hRad = (targetH * Math.PI) / 180;
+  const a = targetC * Math.cos(hRad);
+  const b = targetC * Math.sin(hRad);
+
+  const l_ = targetL + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = targetL - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = targetL - 0.0894841775 * a - 1.291485548 * b;
+
+  const L = l_ * l_ * l_;
+  const M = m_ * m_ * m_;
+  const S = s_ * s_ * s_;
+
+  let linearR = +4.0767416621 * L - 3.3077115913 * M + 0.2309699292 * S;
+  let linearG = -1.2684380046 * L + 2.6097574011 * M - 0.3413193965 * S;
+  let linearB = -0.0041960863 * L - 0.7034186147 * M + 1.707614701 * S;
+
+  const srgb = (cLinear: number) => {
+    const clamped = Math.max(0, Math.min(1, cLinear));
+    return clamped <= 0.0031308
+      ? 12.92 * clamped
+      : 1.055 * Math.pow(clamped, 1 / 2.4) - 0.055;
+  };
+
+  return {
+    r: Math.round(srgb(linearR) * 255),
+    g: Math.round(srgb(linearG) * 255),
+    b: Math.round(srgb(linearB) * 255),
+  };
+}
+
 // RGBからHexコードへ
 export function rgbToHex(rgb: RGB): string {
   const toHex = (n: number) => Math.round(n).toString(16).padStart(2, '0');
@@ -158,25 +215,57 @@ export function analyzeSkinColor(
   let winterScore = 20;
 
   // 1. ベースカラー判定（イエローベース vs ブルーベース）
-  // H: 色相角 (通常人間の肌は 25°〜70°)
-  // H >= 46°: 明確な黄み・ゴールデン (イエベ春・秋)
-  // H < 44°: ピンク・赤み・青み (ブルベ夏・冬)
-  const isWarm = h >= 46.0;
-  const isCool = h < 44.0;
-  const isNeutral = !isWarm && !isCool;
+  // 【重要】OKLCHの色相環 H (0°〜360°):
+  // ・220°〜360°: 青・青紫・紫・マゼンタ (超明確なブルーベース！！)
+  // ・0°〜48°: 赤・チェリー・ピンク・ローズ (ブルーベース〜ニュートラル)
+  // ・52°〜110°: 黄色・ゴールデン・オークル (イエローベース)
+  const rgDiff = Math.max(1, rgb.r - rgb.b);
+  const gbDiff = Math.max(0, rgb.g - rgb.b);
+  const yellowRatio = gbDiff / rgDiff; // 0.42以上は明確な黄み、0.38以下は青み・透明感
 
-  if (isWarm) {
-    // イエローベース優勢
+  // ブルーベース条件:
+  // 1. Hが220°以上 (青・紫・マゼンタ・クール系)
+  // 2. または H < 48° (赤・ピンク・ローズ系)
+  // 3. または (H < 54° かつ yellowRatio < 0.39) (黄みが抜けた透明感肌)
+  // 4. または 青(B)成分が緑(G)と同等以上 (rgb.b >= rgb.g - 5)
+  const isCoolHue = h >= 220.0 || h < 48.0;
+  const isBlueRich = rgb.b >= rgb.g - 8;
+  const isCool = isCoolHue || (h < 54.0 && yellowRatio < 0.39) || isBlueRich;
+
+  // イエローベース条件:
+  // Hが 52°〜120° (黄み・ゴールデン・オークル) かつ GがBより明確に大きい
+  const isWarm = (h >= 52.0 && h < 120.0 && rgb.g > rgb.b + 12) || (h >= 50.0 && h < 100.0 && yellowRatio >= 0.42);
+  const isNeutral = !isCool && !isWarm;
+
+  if (isCool) {
+    // ブルーベース優勢 (夏・冬)
+    // 夏 (中高明度・穏やかな彩度・パウダリー・淡いピンクベージュ)
+    // 冬 (ハイコントラスト・鮮烈血色・アイシー)
+    if (c >= 0.082 || (l < 0.65 && h < 38) || (l >= 0.77 && h < 32)) {
+      // コントラスト・シャープ・鮮烈血色 → 冬 (Winter)
+      winterScore += 48;
+      summerScore += 24;
+      springScore += 8;
+      autumnScore += 6;
+    } else {
+      // やわらか・くすみニュアンス・パウダリー透明感 → 夏 (Summer)
+      summerScore += 50;
+      winterScore += 20;
+      springScore += 10;
+      autumnScore += 6;
+    }
+  } else if (isWarm) {
+    // イエローベース優勢 (春・秋)
     // 春 (高明度・澄んだツヤ) vs 秋 (中低明度・マット・深み)
     if (l >= 0.70) {
       // 明るいイエベ → 春 (Spring)
-      springScore += 45;
+      springScore += 48;
       autumnScore += 20;
       summerScore += 8;
       winterScore += 5;
     } else {
       // 落ち着いた・深みのあるイエベ → 秋 (Autumn)
-      autumnScore += 48;
+      autumnScore += 50;
       springScore += 18;
       winterScore += 10;
       summerScore += 6;
@@ -184,40 +273,22 @@ export function analyzeSkinColor(
 
     // 彩度による補正
     if (c >= 0.085) {
-      springScore += 8; // 華やか・澄んだ
-    } else {
-      autumnScore += 8; // スモーキー・落ち着き
-    }
-  } else if (isCool) {
-    // ブルーベース優勢
-    // 夏 (ソフト・パウダリー・淡い) vs 冬 (ハイコントラスト・鮮やか血色・クリア)
-    // 彩度 C が高め (C >= 0.080) または赤みコントラストが強い場合は冬！
-    // 彩度 C が穏やか (C < 0.080) で中高明度の場合は夏！
-    if (c >= 0.080 || (l < 0.66 && h < 38) || (l >= 0.76 && h < 33)) {
-      // コントラスト・シャープ・鮮烈血色 → 冬 (Winter)
-      winterScore += 48;
-      summerScore += 20;
-      autumnScore += 10;
       springScore += 6;
     } else {
-      // やわらか・くすみニュアンス・パウダリー → 夏 (Summer)
-      summerScore += 46;
-      winterScore += 20;
-      springScore += 10;
       autumnScore += 6;
     }
   } else {
-    // ニュートラル（44°〜46°）
-    if (l >= 0.72) {
-      springScore += 25;
-      summerScore += 25;
-      winterScore += 15;
-      autumnScore += 15;
+    // ニュートラル（中間ゾーン）
+    if (l >= 0.70) {
+      summerScore += 30;
+      springScore += 26;
+      winterScore += 16;
+      autumnScore += 14;
     } else {
-      autumnScore += 25;
-      winterScore += 22;
-      summerScore += 18;
-      springScore += 15;
+      autumnScore += 28;
+      summerScore += 22;
+      winterScore += 20;
+      springScore += 16;
     }
   }
 

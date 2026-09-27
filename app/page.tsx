@@ -41,22 +41,30 @@ export default function Home() {
   const handleColorDetected = (rgb: RGB, calibratedRGB: RGB | null) => {
     setIsProcessing(true);
     const targetRGB = calibratedRGB || rgb;
+    console.log('🎨 [Diagnosis] 開始 targetRGB:', targetRGB, 'mode:', mode);
     setDetectedRGB(targetRGB);
     setIsCalibrated(!!calibratedRGB);
 
     setTimeout(() => {
-      setIsProcessing(false);
-      if (mode === 'detailed') {
-        setPhase('questionnaire');
-      } else {
-        // 即座に写真のみで診断
-        const result = analyzeSkinColor(targetRGB, undefined, !!calibratedRGB);
-        setDiagnosticResult(result);
-        setPhase('result');
-        // GASへバックグラウンド送信
-        sendResultToGAS(result, 'quick');
+      try {
+        setIsProcessing(false);
+        if (mode === 'detailed') {
+          setPhase('questionnaire');
+        } else {
+          // 即座に写真のみで診断
+          const result = analyzeSkinColor(targetRGB, undefined, !!calibratedRGB);
+          console.log('🎨 [Diagnosis] 結果:', result.primarySeason, result.scores);
+          setDiagnosticResult(result);
+          setPhase('result');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          // GASへバックグラウンド送信
+          sendResultToGAS(result, 'quick');
+        }
+      } catch (err) {
+        console.error('Diagnosis processing error:', err);
+        setIsProcessing(false);
       }
-    }, 450);
+    }, 300);
   };
 
   // アンケート完了時
