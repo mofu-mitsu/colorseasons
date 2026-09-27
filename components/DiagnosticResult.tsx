@@ -113,19 +113,35 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
   // 楽天市場API呼び出し
   const fetchRakutenProducts = async (keyword: string) => {
     setIsRakutenLoading(true);
+    console.log(`🛍️ [Rakuten API] リクエスト開始: keyword="${keyword}"`);
     try {
       const res = await fetch(`/api/rakuten?keyword=${encodeURIComponent(keyword)}`);
       const data = await res.json();
+      
+      console.log('🛍️ [Rakuten API 詳細ログ]:', {
+        status: res.status,
+        configured: data.configured,
+        success: data.success,
+        itemCount: data.items?.length || 0,
+        envStatus: data.envStatus,
+        error: data.error,
+        details: data.details,
+        rawItems: data.items,
+      });
+
       if (data.configured) {
         setRakutenConfigured(true);
         if (Array.isArray(data.items) && data.items.length > 0) {
           setRakutenItems(data.items);
+        } else {
+          console.warn('🛍️ [Rakuten API] 商品が0件でした。キーワードや検索条件を確認してください。', data);
         }
       } else {
         setRakutenConfigured(false);
+        console.warn('🛍️ [Rakuten API] 環境変数が検出されませんでした (configured: false):', data.envStatus);
       }
     } catch (err) {
-      console.warn('Failed to load products from Rakuten API:', err);
+      console.error('🛍️ [Rakuten API] 通信エラーまたは例外発生:', err);
       setRakutenConfigured(false);
     } finally {
       setIsRakutenLoading(false);
@@ -645,10 +661,13 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
           </div>
         </div>
 
-        {/* 環境変数設定のご案内 */}
-        <div className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200/70 leading-relaxed">
-          💡 <strong>楽天市場APIキーの設定について:</strong> Vercelや環境変数に <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-800">RAKUTEN_APP_ID</code>、<code className="bg-slate-200 px-1 py-0.5 rounded text-slate-800">RAKUTEN_ACCESS_KEY</code>、<code className="bg-slate-200 px-1 py-0.5 rounded text-slate-800">RAKUTEN_AFFILIATE_ID</code> を設定すると、新API（20260701）による商品データのリアルタイム連携がアクティブになります。未設定時も楽天市場の公式検索へスムーズに連携します。
-        </div>
+        {/* ローディング表示 */}
+        {isRakutenLoading && (
+          <div className="py-8 flex flex-col items-center justify-center gap-2 text-slate-500 text-xs">
+            <RefreshCw className="w-5 h-5 text-red-500 animate-spin" />
+            <span>楽天市場からアイテムを検索中...</span>
+          </div>
+        )}
       </motion.div>
 
       {/* 診断結果カード画像プレビュー＆保存モーダル */}
