@@ -119,9 +119,15 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
   // 楽天市場API呼び出し
   const fetchRakutenProducts = async (keyword: string) => {
     setIsRakutenLoading(true);
-    console.log(`🛍️ [Rakuten API] リクエスト開始: keyword="${keyword}"`);
+
+    // 同じキーワードでも毎回違う商品を見られるよう、検索ページをランダム化
+    const randomPage = Math.floor(Math.random() * 6) + 1;
+
+    console.log(`🛍️ [Rakuten API] リクエスト開始: keyword="${keyword}", page=${randomPage}`);
     try {
-      const res = await fetch(`/api/rakuten?keyword=${encodeURIComponent(keyword)}`);
+      const res = await fetch(
+        `/api/rakuten?keyword=${encodeURIComponent(keyword)}&page=${randomPage}`
+      );
       const data = await res.json();
       
       console.log('🛍️ [Rakuten API 詳細ログ]:', {
@@ -573,11 +579,22 @@ export default function DiagnosticResult({ result, onRetake }: DiagnosticResultP
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               あなたのパーソナルカラーにぴったりなお洋服やコスメを楽天市場から探せます。
+              同じキーワードでも、検索するたびに商品を入れ替えて表示します。
             </p>
           </div>
 
           {/* クイック推薦タブ */}
           <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-full text-xs font-medium shrink-0">
+            {/* まずは診断タイプそのものを検索 */}
+            <button
+              onClick={() => fetchRakutenProducts(`${seasonInfo.shortUndertone}${seasonInfo.name.split(' ')[0]}`)}
+              className="px-3.5 py-1.5 bg-rose-500 hover:bg-rose-600 text-white rounded-full border border-rose-400 transition-all cursor-pointer shadow-2xs font-bold"
+              title="パーソナルカラー名で楽天市場を検索"
+            >
+              {seasonInfo.shortUndertone}{seasonInfo.name.split(' ')[0]}
+            </button>
+
+            {/* 季節ごとの具体的なカラー・カテゴリ検索 */}
             {seasonInfo.rakutenQueries.map((q, idx) => (
               <button
                 key={idx}
