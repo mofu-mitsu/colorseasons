@@ -16,6 +16,12 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const keyword = searchParams.get('keyword');
 
+    // 同じキーワードでも結果を入れ替えられるよう、検索ページを受け取る
+    const requestedPage = Number(searchParams.get('page') || '1');
+    const page = Number.isFinite(requestedPage)
+      ? Math.min(100, Math.max(1, Math.floor(requestedPage)))
+      : 1;
+
     if (!keyword) {
       return NextResponse.json({ error: 'Keyword is required' }, { status: 400 });
     }
@@ -98,12 +104,13 @@ export async function GET(req: NextRequest) {
       targetUrl.searchParams.set('keyword', kw);
       targetUrl.searchParams.set('format', 'json');
       targetUrl.searchParams.set('hits', '12');
+      targetUrl.searchParams.set('page', String(page));
 
       if (affiliateId) {
         targetUrl.searchParams.set('affiliateId', affiliateId.trim());
       }
 
-      console.log(`[Rakuten API] Fetching candidate: "${kw}", URL:`, targetUrl.toString());
+      console.log(`[Rakuten API] Fetching candidate: "${kw}", page=${page}, URL:`, targetUrl.toString());
 
       try {
         const response = await fetch(targetUrl.toString(), {
@@ -213,6 +220,7 @@ export async function GET(req: NextRequest) {
       totalHits: successfulData.count || successfulData.totalHits || normalizedItems.length,
       items: normalizedItems,
       rawItemCount: rawItems.length,
+      page,
       envStatus,
     });
   } catch (error: any) {
